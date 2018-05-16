@@ -1,0 +1,7 @@
+package IdrisElmHelloWorld
+
+executable = app.js
+
+main = Main
+
+pkgs = idrisscript, contrib, idriselm

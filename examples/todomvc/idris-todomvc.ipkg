@@ -1,0 +1,9 @@
+package idrisTodoMVC
+
+executable = app.js
+
+main = Main
+
+sourcedir = src
+
+pkgs = idrisscript, contrib, idriselm
