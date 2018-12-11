@@ -3,6 +3,8 @@ ported on [Idris Programming language](https://www.idris-lang.org/)
 
 ## Building
 
+(*`idris-elm` depends on [IdrisScript](https://github.com/idris-hackers/IdrisScript). If it is not already installed, please install it before preceeding*)
+
 1. Clone the library on your local file system with `git clone`
 
 ```sh
@@ -13,7 +15,7 @@ $ git clone https://github.com/lagunoff/idris-elm.git
 
 ```sh
 $ cd ./idris-elm
-$ idris --install
+$ idris --install idris-elm.ipkg
 ```
 
 3. Create new project, see
