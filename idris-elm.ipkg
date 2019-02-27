@@ -1,6 +1,6 @@
 package idriselm
 
-modules = Elm.Attributes, Elm.Cmd, Elm.Css, Elm.Decode, Elm.Encode, Elm.Events, Elm.Html, Elm.Http, Elm.Platform, Elm.Subs, Elm.Types
+modules = Elm.Attributes, Elm.Decode, Elm.Encode, Elm.Events, Elm.Html, Elm.Platform, Elm.Subs, Elm.Types
 
 sourcedir = src
 

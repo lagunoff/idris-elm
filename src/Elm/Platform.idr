@@ -1,91 +1,98 @@
 module Elm.Platform
-
 import IdrisScript
-import Elm.Decode
 import Elm.Html
-import Elm.Attributes
-import Elm.Subs
-import Control.Monad.Identity
-import Control.Monad.State
-import Elm.Cmd
+import Data.IORef
 
 
 %default total
 %access public export
 
 
-initialize : JS_IO ()
-initialize = do
-  jscall "_idris$exports.either = %0" (JSRef -> JS_IO ()) (believe_me $ eagerEither {a=()} {b=()} {c=()})
-  jscall "_idris$exports.runDecoder = %0" (JSRef -> JS_IO ()) (believe_me $ runDecoder {a=()})
-  jscall "_idris$exports.mapDecoder = %0" (JSRef -> JS_IO ()) (believe_me $ mapDecoder {a=Void} {b=()})
-  jscall "_idris$exports.forceLazy = %0" (JSRef -> JS_IO ()) (believe_me $ Force {t=LazyValue} {a=()})
-  jscall
-    """
-    _elm_lang$core$Native_Platform.initialize = function(init, update, subscriptions, renderer) {
-       var model = init.hasOwnProperty('_0') ? init._0 : init;
-       function tagger(action) {
-         var monad = update(action);
-         var tuple = %0(monad)(model)();
-         model = tuple.hasOwnProperty('$1') ? tuple.$1 : tuple;
-         %1(tuple.$2)(function (msg) { return function () { tagger(msg); } })();
-         stepper(model);
-       }
-       var stepper = renderer(tagger, model);
-    }
-    """
-    (JSRef -> JSRef -> JS_IO ())
-    (believe_me $ runUpdate {model=()} {msg=()}) (believe_me $ runCmd {msg=()})
-where  
-  mapDecoder : (a -> b) -> Decoder a -> Decoder b
-  mapDecoder = map
-  
-  runUpdate : Update model msg () -> model -> JS_IO (UpdateState model msg)
-  runUpdate m model =
-    snd <$> runStateT m (MkUpdateState model Never)
-  
-  runCmd : Cmd msg -> (msg -> JS_IO ()) -> JS_IO ()
-  runCmd command onMessage =
-    flip (eval command) (pure ()) $ \maybeMsg => case maybeMsg of
-      Nothing => pure ()
-      Just msg => onMessage msg
-      
-  eagerEither : (a -> c) -> (b -> c) -> Either a b -> c
-  eagerEither proj_a proj_b =
-    either proj_a proj_b
+Handler : Type -> Type
+Handler msg = msg -> JS_IO ()
 
 
-record Program model action where
+record Program (msg : Type) where
   constructor MkProgram
-  init : model
-  update : action -> Update model action ()
-  view : model -> Html action
+  vdom : IORef (Html msg)
+  domNode : IORef Ptr
+  handler : IORef (Handler msg)
+  eventNode : Ptr
+  
 
-
-embed : JSRef -> Program model action -> JS_IO ()
-embed elem (MkProgram init update view) = do
-  setup <- makeSetup
-  start setup
-where
-  makeSetup : JS_IO JSRef
-  makeSetup =
-    jscall
+createProgram : Html msg -> Handler msg -> JS_IO (Program msg)
+createProgram vdom handler = do
+  vdom' <- newIORef' vdom
+  handler' <- newIORef' handler
+  eventNode <- jscall
     """
-    A2(_elm_lang$virtual_dom$Native_VirtualDom.program, null, { init: %0, update: %1, view: %2 })()
+    function() {
+      var tagger = function(msg) { %0.val(msg)(); };
+      return { tagger: tagger, parent: undefined };
+    } ()
     """
-    (Ptr -> Ptr -> Ptr -> JS_IO Ptr)
-    (believe_me init) (believe_me update) (believe_me view)
-
-  start : JSRef -> JS_IO ()
-  start setup =
-    jscall
-    """
-    function (elem, setup) { var Elm = {}; setup(Elm); Elm.embed(elem); }(%0, %1)
-    """
-    (Ptr -> Ptr -> JS_IO ()) elem setup
+    (Ptr -> JS_IO Ptr)
+    (believe_me handler')
+  
+  domNode <- jscall "_elm_lang$virtual_dom$Native_VirtualDom.render(%0, %1)" (Ptr -> Ptr -> JS_IO Ptr) (unpack vdom) eventNode
+  domNode' <- newIORef' domNode
+  pure $ MkProgram vdom' domNode' handler' eventNode
 
 
-fullscreen : Program model action -> JS_IO ()
-fullscreen program = do
+actuate : Program msg -> Html msg -> JS_IO ()
+actuate (MkProgram vdom' domNode' handler' eventNode) nextVdom = do
+  vdom <- readIORef' vdom'
+  domNode <- readIORef' domNode'
+  handler <- readIORef' handler'
+  patches <- jscall "_elm_lang$virtual_dom$Native_VirtualDom.diff(%0, %1)" (Ptr -> Ptr -> JS_IO Ptr) (unpack vdom) (unpack nextVdom)
+  jscall "_elm_lang$virtual_dom$Native_VirtualDom.applyPatches(%0, %1, %2, %3)" (Ptr -> Ptr -> Ptr -> Ptr -> JS_IO ()) domNode (unpack vdom) patches eventNode
+  writeIORef' vdom' nextVdom
+
+
+noopHandler : Handler msg
+noopHandler = const (pure ())
+
+
+attach : Program msg -> Ptr -> JS_IO ()
+attach (MkProgram _ domNode _ _) parentNode = do
+  domNodePtr <- readIORef' domNode
+  jscall "%0.appendChild(%1)" (Ptr -> Ptr -> JS_IO ()) parentNode domNodePtr
+
+
+detach : Program msg -> JS_IO ()
+detach (MkProgram _ domNodeRef _ _) = do
+  domNode <- readIORef' domNodeRef
+  jscall "%0.parentNode && %0.parentNode.removeChildren(%0)" (Ptr -> JS_IO ()) domNode
+  
+
+replaceHandler : Program msg -> Handler msg -> JS_IO ()
+replaceHandler (MkProgram _ _ handlerRef _) nextHandler = do
+  writeIORef' handlerRef nextHandler
+
+
+embed : Ptr -> Html msg -> Handler msg -> JS_IO (Program msg)
+embed elem vdom handler = do
+  inst <- createProgram vdom handler
+  attach inst elem
+  pure inst
+
+
+fullscreen : Html msg -> Handler msg -> JS_IO (Program msg)
+fullscreen vdom handler = do
   elem <- jscall "document.body" (JS_IO Ptr)
-  embed elem program
+  embed elem vdom handler
+
+
+embed' : Ptr -> model -> (model -> Html msg) -> (IORef model -> Program msg -> Handler msg) -> JS_IO (Program msg)
+embed' elem init view eval = do
+  modelRef <- newIORef' init
+  inst <- createProgram (view init) noopHandler
+  replaceHandler inst (eval modelRef inst)
+  attach inst elem
+  pure inst
+
+
+fullscreen' : model -> (model -> Html msg) -> (IORef model -> Program msg -> Handler msg) -> JS_IO (Program msg)
+fullscreen' init view eval = do
+  elem <- jscall "document.body" (JS_IO Ptr)
+  embed' elem init view eval

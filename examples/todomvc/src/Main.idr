@@ -4,15 +4,14 @@ import IdrisScript
 import Elm.Html
 import Elm.Attributes 
 import Elm.Events
-import Item as Item
-import Elm.Cmd
 import Elm.Subs
 import Control.Pipeline
 import Elm.Platform
 import Elm.Decode
 import Elm.Encode
 import Utils
-
+import Data.IORef
+import Item as Item
 
 public export
 data Filter = All | Active | Completed  
@@ -83,12 +82,12 @@ record Model where
   filter : Filter
   
 export
-data Action
+data Msg
   = Edit String
   | SetFilter Filter
   | ToggleAll Bool
   | ClearCompleted
-  | Todo String Item.Action
+  | Todo String Item.Msg
   | KeyPress Int
   | HashChange String
   | BeforeUnload
@@ -100,41 +99,54 @@ init =
   MkModel ""
 
 export
-update : Main.Action -> Update Main.Model Main.Action ()
-update action = case action of
-  (Edit x) => modifyModel {model=Main.Model} $ record { title = x }
-  (SetFilter x) => modifyModel $ record { filter = x }
-  (ToggleAll check) => modifyModel $ record { todos $= map (\(id, model) => (id, record { completed = check } model)) }
-  (ClearCompleted) => modifyModel $ record { todos $= filter (not . completed . snd) }
+update : Main.Msg -> Main.Model -> JS_IO Main.Model
+update msg model = case msg of
+  (Edit x) =>
+    pure $ record { title = x } model
+     
+  (SetFilter x) =>
+    pure $ record { filter = x } model
+     
+  (ToggleAll check) =>
+    pure $ record { todos $= map (\(id, model) => (id, record { completed = check } model)) } model
+     
+  (ClearCompleted) =>
+    pure $ record { todos $= filter (not . Item.Model.completed . snd) } model
+    
   (KeyPress 13) => do
-    model <- getModel
     case trim (Main.Model.title model) of
-      "" => pure ()
+      "" => pure model
       trimmed => do
-        id <- lift $ genUUID4
-        modifyModel $ record { todos $= flip Prelude.List.(++) [(id, Item.init trimmed)] }
-        modifyModel {model=Main.Model} $ record { title = "" }
-  (KeyPress _) => pure ()
+        id <- genUUID4
+        pure $ record { todos $= flip (++) [(id, Item.init trimmed)], title = "" } model
+        
+  (KeyPress _) =>
+     pure model
+     
   (HashChange hash) =>
     case fromUrl hash of
-      (Just x) => modifyModel $ record { filter = x }
+      (Just x) => pure $ record { filter = x } model
       Nothing => do
-        lift $ fixHash (toUrl All)
-        modifyModel $ record { filter = All }
-  BeforeUnload => do
-    model <- getModel
-    lift $ localStorageSetItem "todomvc-idris-elm" $ encodeTodos (todos model)
-    pure ()
-  (Todo id Destroy) => modifyModel $ record { todos $= filter (\(x, _) => not (x == id)) }
-  (Todo id action') => do
-    model <- getModel
-    (Just (_, model')) <- pure $ find ((==) id . fst) (todos model) | Nothing => pure ()
-    (nextModel, commands) <- lift $ runUpdate (Item.update action') model'
-    batchCommand $ map (map $ Todo id) commands
-    modifyModel $ record { todos $= map (\p => if id == fst p then (id, nextModel) else p) }
+        fixHash (toUrl All)
+        pure $ record { filter = All } model
+        
+  (BeforeUnload) => do
+    localStorageSetItem "todomvc-idris-elm" $ encodeTodos (todos model)
+    pure model
+    
+  (Todo id Destroy) =>
+     pure $ record { todos $= filter (\(x, _) => not (x == id)) } model
+     
+  (Todo id msg') => do
+    (Just (_, model')) <- pure $ find ((==) id . fst) (todos model) | Nothing => pure model
+    (itemModel, maybeMsg) <- Item.update msg' model'
+    let nextModel = record { todos $= map (\p => if id == fst p then (id, itemModel) else p) } model
+    case maybeMsg of
+      Just msg => update (Todo id msg) nextModel
+      Nothing => pure nextModel
 
 export
-view : Main.Model -> Html Main.Action
+view : Main.Model -> Html Main.Msg
 view (MkModel title todos filter) =
   div
   [ subscribe "beforeunload" $ addEventListener window "beforeunload" (pure BeforeUnload)
@@ -151,9 +163,9 @@ view (MkModel title todos filter) =
   where
   itemsLeft : Nat
   itemsLeft =
-    foldl (\acc, (_, model) => if not (completed model) then acc + 1 else acc) 0 todos
+    foldl (\acc, (_, model) => if not (Item.Model.completed model) then acc + 1 else acc) 0 todos
     
-  viewHeader : Html Main.Action
+  viewHeader : Html Main.Msg
   viewHeader =
     header [ class' "header" ]
     [ h1_ [ text "todos" ]
@@ -167,7 +179,7 @@ view (MkModel title todos filter) =
       ] []
     ]
   
-  viewMain : Html Main.Action
+  viewMain : Html Main.Msg
   viewMain =
     section
     [ class' "main"
@@ -179,15 +191,15 @@ view (MkModel title todos filter) =
       $ todos
         |> Prelude.List.filter (applyFilter filter . snd)
         |> map (\(id, todo) => Item.view todo |> map (Todo id))
-        |> cast {to=ElmList (Html Action)}
+        |> cast {to=ElmList (Html Msg)}
     ]
 
-  viewFilter : Filter -> Html Main.Action
+  viewFilter : Filter -> Html Main.Msg
   viewFilter x =
     li_
     [ a [ classList [("selected", x == filter)], href $ toUrl x ] [ text $ show x ] ]
     
-  viewFooter : Html Main.Action
+  viewFooter : Html Main.Msg
   viewFooter =
     footer
     [ class' "footer"
@@ -208,11 +220,19 @@ view (MkModel title todos filter) =
     , p_ [ text "Part of ", a [ href "http://todomvc.com" ] [ text "TodoMVC" ] ]
     ]
 
+eval : IORef Main.Model -> Program Main.Msg -> Main.Msg -> JS_IO ()
+eval modelRef inst msg = do
+  model <- readIORef' modelRef
+  nextModel <- update msg model
+  writeIORef' modelRef nextModel
+  actuate inst (view nextModel)
+
+
 main : JS_IO ()
 main = do
   todos <- localStorageGetItem "todomvc-idris-elm" todosDecoder
-  initialize
   hash <- readHash
   let filter = maybe All id (fromUrl hash)
-  let program = MkProgram (Main.init (either (const []) id todos) filter) update view
-  fullscreen program
+  let model = Main.init (either (const []) id todos) filter
+  fullscreen' model view eval
+  pure ()

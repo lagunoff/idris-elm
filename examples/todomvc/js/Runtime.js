@@ -1,3 +1,16 @@
+$JSRTS = {
+  force: function (x) {
+    if (x === undefined || x.js_idris_lazy_calc === undefined) {
+      return x
+    } else {
+      if (x.js_idris_lazy_val === undefined) {
+        x.js_idris_lazy_val = x.js_idris_lazy_calc()
+      }
+      return x.js_idris_lazy_val
+    }
+  }
+};
+
 // taken from https://github.com/jashkenas/underscore/blob/master/underscore.js#L1182
 
 // Internal recursive comparison function for `isEqual`.
@@ -477,14 +490,14 @@ function subscribe(key, lazy)
 }
 
 
-function on(name, options, decoder)
+function on(name, options, decodeEvent)
 {
 	return {
 		key: EVENT_KEY,
 		realKey: name,
 		value: {
 			options: options,
-			decoder: decoder
+			decodeEvent: decodeEvent
 		}
 	};
 }
@@ -499,11 +512,11 @@ function equalEvents(a, b)
 			return false;
 		}
 	}
-	return _elm_lang$core$Native_Json.equality(a.decoder, b.decoder);
+	return _elm_lang$core$Native_Json.equality(a.decodeEvent, b.decodeEvent);
 }
 
 
-function mapProperty(func, property)
+function mapProperty(mapEventDecode, func, property)
 {
 	if (property.key !== EVENT_KEY)
 	{
@@ -512,7 +525,7 @@ function mapProperty(func, property)
 	return on(
 		property.realKey,
 		property.value.options,
-		A2(_idris$exports.mapDecoder, func, property.value.decoder)
+		A2(mapEventDecode, func, property.value.decodeEvent)
 	);
 }
 
@@ -683,10 +696,8 @@ function makeEventHandler(eventNode, info)
 	{
 		var info = eventHandler.info;
 
-		var value = A2(_idris$exports.runDecoder, info.decoder, event);
-
-		if (value.type === 1)
-		{
+		info.decodeEvent(event)(function(value) {
+            return function() {
 			var options = info.options;
 			if (options.stopPropagation)
 			{
@@ -697,7 +708,7 @@ function makeEventHandler(eventNode, info)
 				event.preventDefault();
 			}
 
-			var message = value.$1;
+			var message = value;
 
 			var currentEventNode = eventNode;
 			while (currentEventNode)
@@ -716,7 +727,8 @@ function makeEventHandler(eventNode, info)
 				}
 				currentEventNode = currentEventNode.parent;
 			}
-		}
+            };
+		})();
 	};
 
 	eventHandler.info = info;
@@ -810,8 +822,8 @@ function makeSubscriptionHandler(eventNode, lazy)
 			}
                 };
 	};
-        
-        var subscribe = _idris$exports.forceLazy(lazy);
+  
+        var subscribe = $JSRTS.force(lazy);
         subscriptionHandler.unsubscribe = subscribe(subscriptionHandler)();
 	return subscriptionHandler;
 }
@@ -1699,107 +1711,26 @@ function cleanupBeforeRemove(domNode) {
 }
 
 
-// PROGRAMS
-
-var program = makeProgram(checkNoFlags);
-
-function makeProgram(flagChecker)
+// RUNNING PROGRAM
+function embed(parentNode, initialModel, view, handler)
 {
-	return F2(function(debugWrap, impl)
-	{
-		return function(flagDecoder)
-		{
-			return function(object, moduleName, debugMetadata)
-			{
-				var checker = flagChecker(flagDecoder, moduleName);
-				if (typeof debugMetadata === 'undefined')
-				{
-					normalSetup(impl, object, moduleName, checker);
-				}
-				else
-				{
-					debugSetup(A2(debugWrap, debugMetadata, impl), object, moduleName, checker);
-				}
-			};
-		};
-	});
-}
-
-
-// FLAG CHECKERS
-
-function checkNoFlags(flagDecoder, moduleName)
-{
-	return function(init, flags, domNode)
-	{
-		if (typeof flags === 'undefined')
-		{
-			return init;
-		}
-
-		var errorMessage =
-			'The `' + moduleName + '` module does not need flags.\n'
-			+ 'Initialize it with no arguments and you should be all set!';
-
-		crash(errorMessage, domNode);
-	};
-}
-
-function crash(errorMessage, domNode)
-{
-	if (domNode)
-	{
-		domNode.innerHTML =
-			'<div style="padding-left:1em;">'
-			+ '<h2 style="font-weight:normal;"><b>Oops!</b> Something went wrong when starting your Elm program.</h2>'
-			+ '<pre style="padding-left:1em;">' + errorMessage + '</pre>'
-			+ '</div>';
-	}
-
-	throw new Error(errorMessage);
-}
-
-
-//  NORMAL SETUP
-
-function normalSetup(impl, object, moduleName, flagChecker)
-{
-	object['embed'] = function embed(node, flags)
-	{
-		while (node.lastChild)
-		{
-			node.removeChild(node.lastChild);
-		}
-
-		return _elm_lang$core$Native_Platform.initialize(
-			flagChecker(impl.init, flags, node),
-			impl.update,
-			impl.subscriptions,
-			normalRenderer(node, impl.view)
-		);
-	};
-
-	object['fullscreen'] = function fullscreen(flags)
-	{
-		return _elm_lang$core$Native_Platform.initialize(
-			flagChecker(impl.init, flags, document.body),
-			impl.update,
-			impl.subscriptions,
-			normalRenderer(document.body, impl.view)
-		);
-	};
-}
-
-function normalRenderer(parentNode, view)
-{
-	return function(tagger, initialModel)
-	{
-		var eventNode = { tagger: tagger, parent: undefined };
-		var initialVirtualNode = view(initialModel);
-		var domNode = render(initialVirtualNode, eventNode);
-		parentNode.appendChild(domNode);
-		return makeStepper(domNode, view, initialVirtualNode, eventNode);
-	};
+  var tagger = function(msg) { handler(msg)(); };
+  var eventNode = { tagger: tagger, parent: undefined };
+  var initialVirtualNode = view(initialModel);
+  var domNode = render(initialVirtualNode, eventNode);
+  parentNode.appendChild(domNode);
+  var stepper = makeStepper(domNode, view, initialVirtualNode, eventNode);
+  var actuate = function(model) {
+    return function() {
+      elmStepper(model);
+    };
+  };
+  var destroy = function() { console.log('destroy: TODO'); };
+  return {
+    actuate: actuate,
+    destroy: destroy,
+    domNode: domNode
+  };
 }
 
 
@@ -1855,260 +1786,6 @@ function makeStepper(domNode, view, initialVirtualNode, eventNode)
 }
 
 
-// DEBUG SETUP
-
-function debugSetup(impl, object, moduleName, flagChecker)
-{
-	object['fullscreen'] = function fullscreen(flags)
-	{
-		var popoutRef = { doc: undefined };
-		return _elm_lang$core$Native_Platform.initialize(
-			flagChecker(impl.init, flags, document.body),
-			impl.update(scrollTask(popoutRef)),
-			impl.subscriptions,
-			debugRenderer(moduleName, document.body, popoutRef, impl.view, impl.viewIn, impl.viewOut)
-		);
-	};
-
-	object['embed'] = function fullscreen(node, flags)
-	{
-		var popoutRef = { doc: undefined };
-		return _elm_lang$core$Native_Platform.initialize(
-			flagChecker(impl.init, flags, node),
-			impl.update(scrollTask(popoutRef)),
-			impl.subscriptions,
-			debugRenderer(moduleName, node, popoutRef, impl.view, impl.viewIn, impl.viewOut)
-		);
-	};
-}
-
-function scrollTask(popoutRef)
-{
-	return _elm_lang$core$Native_Scheduler.nativeBinding(function(callback)
-	{
-		var doc = popoutRef.doc;
-		if (doc)
-		{
-			var msgs = doc.getElementsByClassName('debugger-sidebar-messages')[0];
-			if (msgs)
-			{
-				msgs.scrollTop = msgs.scrollHeight;
-			}
-		}
-		callback(_elm_lang$core$Native_Scheduler.succeed(_elm_lang$core$Native_Utils.Tuple0));
-	});
-}
-
-
-function debugRenderer(moduleName, parentNode, popoutRef, view, viewIn, viewOut)
-{
-	return function(tagger, initialModel)
-	{
-		var appEventNode = { tagger: tagger, parent: undefined };
-		var eventNode = { tagger: tagger, parent: undefined };
-
-		// make normal stepper
-		var appVirtualNode = view(initialModel);
-		var appNode = render(appVirtualNode, appEventNode);
-		parentNode.appendChild(appNode);
-		var appStepper = makeStepper(appNode, view, appVirtualNode, appEventNode);
-
-		// make overlay stepper
-		var overVirtualNode = viewIn(initialModel)._1;
-		var overNode = render(overVirtualNode, eventNode);
-		parentNode.appendChild(overNode);
-		var wrappedViewIn = wrapViewIn(appEventNode, overNode, viewIn);
-		var overStepper = makeStepper(overNode, wrappedViewIn, overVirtualNode, eventNode);
-
-		// make debugger stepper
-		var debugStepper = makeDebugStepper(initialModel, viewOut, eventNode, parentNode, moduleName, popoutRef);
-
-		return function stepper(model)
-		{
-			appStepper(model);
-			overStepper(model);
-			debugStepper(model);
-		}
-	};
-}
-
-function makeDebugStepper(initialModel, view, eventNode, parentNode, moduleName, popoutRef)
-{
-	var curr;
-	var domNode;
-
-	return function stepper(model)
-	{
-		if (!model.isDebuggerOpen)
-		{
-			return;
-		}
-
-		if (!popoutRef.doc)
-		{
-			curr = view(model);
-			domNode = openDebugWindow(moduleName, popoutRef, curr, eventNode);
-			return;
-		}
-
-		// switch to document of popout
-		localDoc = popoutRef.doc;
-
-		var next = view(model);
-		var patches = diff(curr, next);
-		domNode = applyPatches(domNode, curr, patches, eventNode);
-		curr = next;
-
-		// switch back to normal document
-		localDoc = document;
-	};
-}
-
-function openDebugWindow(moduleName, popoutRef, virtualNode, eventNode)
-{
-	var w = 900;
-	var h = 360;
-	var x = screen.width - w;
-	var y = screen.height - h;
-	var debugWindow = window.open('', '', 'width=' + w + ',height=' + h + ',left=' + x + ',top=' + y);
-
-	// switch to window document
-	localDoc = debugWindow.document;
-
-	popoutRef.doc = localDoc;
-	localDoc.title = 'Debugger - ' + moduleName;
-	localDoc.body.style.margin = '0';
-	localDoc.body.style.padding = '0';
-	var domNode = render(virtualNode, eventNode);
-	localDoc.body.appendChild(domNode);
-
-	localDoc.addEventListener('keydown', function(event) {
-		if (event.metaKey && event.which === 82)
-		{
-			window.location.reload();
-		}
-		if (event.which === 38)
-		{
-			eventNode.tagger({ ctor: 'Up' });
-			event.preventDefault();
-		}
-		if (event.which === 40)
-		{
-			eventNode.tagger({ ctor: 'Down' });
-			event.preventDefault();
-		}
-	});
-
-	function close()
-	{
-		popoutRef.doc = undefined;
-		debugWindow.close();
-	}
-	window.addEventListener('unload', close);
-	debugWindow.addEventListener('unload', function() {
-		popoutRef.doc = undefined;
-		window.removeEventListener('unload', close);
-		eventNode.tagger({ ctor: 'Close' });
-	});
-
-	// switch back to the normal document
-	localDoc = document;
-
-	return domNode;
-}
-
-
-// BLOCK EVENTS
-
-function wrapViewIn(appEventNode, overlayNode, viewIn)
-{
-	var ignorer = makeIgnorer(overlayNode);
-	var blocking = 'Normal';
-	var overflow;
-
-	var normalTagger = appEventNode.tagger;
-	var blockTagger = function() {};
-
-	return function(model)
-	{
-		var tuple = viewIn(model);
-		var newBlocking = tuple._0.ctor;
-		appEventNode.tagger = newBlocking === 'Normal' ? normalTagger : blockTagger;
-		if (blocking !== newBlocking)
-		{
-			traverse('removeEventListener', ignorer, blocking);
-			traverse('addEventListener', ignorer, newBlocking);
-
-			if (blocking === 'Normal')
-			{
-				overflow = document.body.style.overflow;
-				document.body.style.overflow = 'hidden';
-			}
-
-			if (newBlocking === 'Normal')
-			{
-				document.body.style.overflow = overflow;
-			}
-
-			blocking = newBlocking;
-		}
-		return tuple._1;
-	}
-}
-
-function traverse(verbEventListener, ignorer, blocking)
-{
-	switch(blocking)
-	{
-		case 'Normal':
-			return;
-
-		case 'Pause':
-			return traverseHelp(verbEventListener, ignorer, mostEvents);
-
-		case 'Message':
-			return traverseHelp(verbEventListener, ignorer, allEvents);
-	}
-}
-
-function traverseHelp(verbEventListener, handler, eventNames)
-{
-	for (var i = 0; i < eventNames.length; i++)
-	{
-		document.body[verbEventListener](eventNames[i], handler, true);
-	}
-}
-
-function makeIgnorer(overlayNode)
-{
-	return function(event)
-	{
-		if (event.type === 'keydown' && event.metaKey && event.which === 82)
-		{
-			return;
-		}
-
-		var isScroll = event.type === 'scroll' || event.type === 'wheel';
-
-		var node = event.target;
-		while (node !== null)
-		{
-			if (node.className === 'elm-overlay-message-details' && isScroll)
-			{
-				return;
-			}
-
-			if (node === overlayNode && !isScroll)
-			{
-				return;
-			}
-			node = node.parentNode;
-		}
-
-		event.stopPropagation();
-		event.preventDefault();
-	}
-}
 
 var mostEvents = [
 	'click', 'dblclick', 'mousemove',
@@ -2126,44 +1803,28 @@ var allEvents = mostEvents.concat('wheel', 'scroll');
 
 
 return {
-	node: node,
-	text: text,
-	custom: custom,
-	map: F2(map),
+  node: node,
+  text: text,
+  custom: custom,
+  map: F2(map),
 
-	on: F3(on),
-	style: style,
-	property: F2(property),
-	attribute: F2(attribute),
-	attributeNS: F3(attributeNS),
-	subscribe: F2(subscribe),
-	mapProperty: F2(mapProperty),
+  on: F3(on),
+  style: style,
+  property: F2(property),
+  attribute: F2(attribute),
+  attributeNS: F3(attributeNS),
+  subscribe: F2(subscribe),
+  mapProperty: F3(mapProperty),
 
-	lazy: F2(lazy),
-	lazy2: F3(lazy2),
-	lazy3: F4(lazy3),
-	keyedNode: F3(keyedNode),
+  lazy: F2(lazy),
+  lazy2: F3(lazy2),
+  lazy3: F4(lazy3),
+  keyedNode: F3(keyedNode),
 
-	program: program
+  embed: embed,
+  render: render,
+  diff: diff,
+  applyPatches: applyPatches
 };
 
 }();
-
-
-var _idris$exports = {
-    either: function () {
-        throw new Error('_idris$exports.either: Unimplemented, call Elm.Platform.initialize first');
-    },
-    
-    runDecoder: function () {
-        throw new Error('_idris$exports.runDecoder: Unimplemented, call Elm.Platform.initialize first');
-    },
-    
-    mapDecoder: function () {
-        throw new Error('_idris$exports.mapDecoder: Unimplemented, call Elm.Platform.initialize first');
-    },
-    
-    forceLazy: function () {
-        throw new Error('_idris$exports.forceLazy: Unimplemented, call Elm.Platform.initialize first');
-    }
-};

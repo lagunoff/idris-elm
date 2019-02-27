@@ -24,6 +24,9 @@ unpack (MkAttribute ptr) = ptr
 Styles : Type
 Styles = ElmList (ElmTuple String String)
 
+ValidateEvent : Type -> Type
+ValidateEvent msg = Ptr -> (msg -> JS_IO ()) -> JS_IO ()
+
 
 -- PRIMITIVES
 
@@ -86,6 +89,9 @@ attribute : String -> String -> Attribute msg
 attribute k v =
   MkAttribute $ unsafePerformIO $ jscall "A2(_elm_lang$virtual_dom$Native_VirtualDom.attribute, %0, %1)" (String -> String -> JS_IO Ptr) k v
 
+    
+mapDecodeEvent : (a -> b) -> ValidateEvent a -> ValidateEvent b
+mapDecodeEvent proj fa = \ptr, handler => fa ptr (handler . proj)
 
 ||| Transform the messages produced by an `Attribute`.
 Functor Attribute where
@@ -93,9 +99,9 @@ Functor Attribute where
     believe_me
       $ unsafePerformIO
       $ jscall
-        "A2(_elm_lang$virtual_dom$Native_VirtualDom.mapProperty, %0, %1)"
-        (Ptr -> Ptr -> JS_IO Ptr)
-        (believe_me f) (believe_me x)
+        "A3(_elm_lang$virtual_dom$Native_VirtualDom.mapProperty, %0, %1, %2)"
+        (Ptr -> Ptr -> Ptr -> JS_IO Ptr)
+        (believe_me $ mapDecodeEvent {a=()} {b=()}) (believe_me f) (believe_me x)
 
 
 -- GLOBAL ATTRIBUTES

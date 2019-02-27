@@ -4,7 +4,6 @@ import IdrisScript
 import Elm.Html
 import Elm.Attributes
 import Elm.Events
-import Elm.Cmd
 import Elm.Decode
 import Elm.Encode
 import Utils
@@ -15,9 +14,9 @@ currentTarget =
   at ["currentTarget"] Any
 
 keyCodeEq : Int -> a -> Decoder a
-keyCodeEq code action = do
+keyCodeEq code msg = do
   code' <- keyCode
-  if code' == code then pure action else Failure "Different key code"
+  if code' == code then pure msg else Failure "Different key code"
   
 
 public export
@@ -28,13 +27,13 @@ record Model where
   editing : Maybe String
 
 public export
-data Action
+data Msg
   = Completed Bool
   | Destroy
   | EditingOn Json
-  | EditInput String
-  | EditingCancel
-  | EditingCommit
+  | Input String
+  | Cancel
+  | Commit
 
 export
 init : String -> Model
@@ -42,24 +41,32 @@ init title =
   MkModel title False Nothing
 
 export
-update : Action -> Update Model Action ()
-update action = case action of
-  (Completed x) => modifyModel $ record { completed = x }
-  Destroy => pure ()
+update : Msg -> Model -> JS_IO (Model, Maybe Msg)
+update msg model = case msg of
+  (Completed x) =>
+    pure $ (record { completed = x } model, Nothing)
+    
+  (Destroy) =>
+     pure (model, Nothing)
+     
   (EditingOn (MkJson el)) => do
-    lift $ setTimeout 100 $ jscall "%0.parentElement.querySelector('.edit').focus()" (JSRef -> JS_IO ()) el
-    modifyModel $ \model => record { editing = Just (title model) } model
-  (EditInput x) => modifyModel $ record { editing $= map (const x) }
-  EditingCancel => modifyModel $ record { editing = Nothing }
-  EditingCommit => do 
-    model <- getModel
+    setTimeout 100 $ jscall "%0.parentNode.querySelector('.edit').focus()" (JSRef -> JS_IO ()) el
+    pure $ (record { editing = Just (title model) } model, Nothing)
+    
+  (Input x) =>
+     pure $ (record { editing $= map (const x) } model, Nothing)
+     
+  (Cancel) =>
+     pure $ (record { editing = Nothing } model, Nothing)
+     
+  (Commit) => 
     case editing model of
-      (Just "") => batchCommand $ pure $ Just Destroy
-      (Just str) => putModel $ record { editing = Nothing, title = str } model
-      Nothing => pure ()
+      (Just "") => pure (model, Just Destroy)
+      (Just str) => pure $ (record { editing = Nothing, title = str } model, Nothing)
+      Nothing => pure (model, Nothing)
     
 export
-view : Model -> Html Action
+view : Model -> Html Msg
 view (MkModel title completed editing) =
   li
   [ classList 
@@ -83,10 +90,10 @@ view (MkModel title completed editing) =
   , input
     [ class' "edit"
     , value $ maybe "" id editing
-    , onInput EditInput
-    , onBlur EditingCommit
-    , on "keypress" (keyCodeEq 13 EditingCommit) -- Enter
-    , on "keydown" (keyCodeEq 27 EditingCancel) -- Escape
+    , onInput Input
+    , onBlur Commit
+    , on "keypress" (keyCodeEq 13 Commit) -- Enter
+    , on "keydown" (keyCodeEq 27 Cancel) -- Escape
     ] []
   ]
 

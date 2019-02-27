@@ -11,6 +11,7 @@ import Elm.Decode
 %default total
 %access public export
 
+
 -- CUSTOM EVENTS
 
 ||| Options for an event listener. If `stopPropagation` is true, it means the
@@ -46,13 +47,17 @@ defaultOptions =
 
 ||| Same as `on` but you can set a few options.
 onWithOptions : String -> Options -> Decoder msg -> Attribute msg
-onWithOptions name options decoder =
+onWithOptions {msg} name options decoder =
   MkAttribute
     $ unsafePerformIO
     $ jscall "A3(_elm_lang$virtual_dom$Native_VirtualDom.on, %0, %1, %2)"
       (String -> Ptr -> Ptr -> JS_IO Ptr)
-      name (unpack $ toJS options {to=JSObject "Object"}) (believe_me decoder)
-
+      name (unpack $ toJS options {to=JSObject "Object"}) (believe_me $ decodeEvent decoder)
+  where
+    decodeEvent : Decoder msg -> Ptr -> (msg -> JS_IO ()) -> JS_IO ()
+    decodeEvent decoder ptr onSuccess = case runDecoder decoder (MkJson ptr) of
+      Left err => pure ()
+      Right m => onSuccess m
 
 ||| Create a custom event listener. Normally this will not be necessary, but
 ||| you have the power! Here is how `onClick` is defined for example:

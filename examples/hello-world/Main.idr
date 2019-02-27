@@ -4,9 +4,9 @@ import Elm.Html
 import Elm.Attributes
 import Elm.Events
 import Elm.Decode
-import Elm.Cmd
 import Elm.Platform
 import Utils
+import Data.IORef
 
 %default total
 
@@ -20,7 +20,7 @@ record Model where
   constructor MkModel
   colorNo : (n : Nat ** InBounds n Main.colors)
     
-data Action
+data Msg
   = NextColor
   
 init : Model  
@@ -28,12 +28,11 @@ init =
   MkModel (0 ** InFirst)
   
   
-update : Action -> Update Model Action ()
-update action = case action of
-  NextColor => modifyModel $ record { colorNo $= listCycle colors }
+update : Msg -> Model -> Model
+update NextColor = record { colorNo $= listCycle colors }
 
 
-view : Model -> Html Action
+view : Model -> Html Msg
 view (MkModel (n ** _)) =
   div [ class' "root" ]
   [ h2
@@ -51,13 +50,22 @@ view (MkModel (n ** _)) =
     """
     html, body { margin: 0; height: 100%; }
     .root { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
-    .root > h2 { font-size: 48px; margin: 0; font-family: "Helvetica", Arial, sans-serif; font-weight: 600; border: dashed 3px #0000001a; cursor: default; padding: 8px 16px; }
+    .root > h2 { font-size: 48px; margin: 0; font-family: "Helvetica", Arial, sans-serif; font-weight: 600; border: dashed 4px rgba(0,0,0,0.12); cursor: default; padding: 8px 16px; }
     """
+
+
+eval : IORef Model -> Program Msg -> Msg -> JS_IO ()
+eval modelRef inst msg = do
+  model <- readIORef' modelRef
+  let nextModel = update msg model
+  writeIORef' modelRef nextModel
+  actuate inst (view nextModel)
+
 
 main : JS_IO ()
 main = do
-  initialize
-  let program = MkProgram init update view
-  fullscreen program
+  let model = init
+  fullscreen' model view eval
+  pure ()
 
 
